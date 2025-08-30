@@ -54,7 +54,6 @@ export const authOptions: NextAuthOptions = {
 }
 
 declare module 'next-auth' {
-  // eslint-disable-next-line @typescript-eslint/no-empty-interface
   interface Session {
     user?: {
       id: string
