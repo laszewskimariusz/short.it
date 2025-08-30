@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { urlSchema } from '@/lib/validators'
 import { customAlphabet } from 'nanoid'
+import { Prisma, Link } from '@prisma/client'
 
 // Simple in-memory rate limiter
 type Entry = { count: number; resetAt: number }
@@ -61,35 +62,53 @@ export async function POST(req: Request) {
   }
   const { originalUrl, alias, title, expiresAt } = parsed.data
 
-  let slug = (alias || '').trim()
-  if (!slug) {
-    // Ensure unique slug
-    for (let i = 0; i < 5; i++) {
-      const candidate = nano()
-      const exists = await prisma.link.findUnique({ where: { slug: candidate } })
-      if (!exists) {
-        slug = candidate
-        break
-      }
-    }
-    if (!slug) return NextResponse.json({ error: 'Failed to generate slug' }, { status: 500 })
-  } else {
-    const exists = await prisma.link.findUnique({ where: { slug } })
-    if (exists) return NextResponse.json({ error: 'Alias already taken' }, { status: 409 })
-  }
-
   let finalTitle = title?.trim() || null
   if (!finalTitle) finalTitle = await fetchTitle(originalUrl)
 
-  const link = await prisma.link.create({
-    data: {
-      userId: session.user.id,
-      slug,
-      originalUrl,
-      title: finalTitle,
-      expiresAt: expiresAt ? new Date(expiresAt) : null
+  let link: Link | null = null
+
+  if (alias?.trim()) {
+    try {
+      link = await prisma.link.create({
+        data: {
+          userId: session.user.id,
+          slug: alias.trim(),
+          originalUrl,
+          title: finalTitle,
+          expiresAt: expiresAt ? new Date(expiresAt) : null
+        }
+      })
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        return NextResponse.json({ error: 'Alias already taken' }, { status: 409 })
+      }
+      throw e
     }
-  })
+  } else {
+    for (let i = 0; i < 5; i++) {
+      const slug = nano()
+      try {
+        link = await prisma.link.create({
+          data: {
+            userId: session.user.id,
+            slug,
+            originalUrl,
+            title: finalTitle,
+            expiresAt: expiresAt ? new Date(expiresAt) : null
+          }
+        })
+        break
+      } catch (e) {
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+          continue
+        }
+        throw e
+      }
+    }
+    if (!link) {
+      return NextResponse.json({ error: 'Failed to generate slug' }, { status: 500 })
+    }
+  }
 
   return NextResponse.json({
     id: link.id,
